@@ -18,13 +18,14 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "can.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,6 +46,11 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+uint8_t Rx_byte; // ï¿½ï¿½Ç°ï¿½ï¿½ï¿½Õµï¿½ï¿½ï¿½ï¿½Ö½ï¿½
+char Rx_USART1_cmd[15]; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½Ö¸ï¿½ï¿½
+uint8_t Rx_str_index = 0;
+float target_speed = 0.0f; // ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Öµ
+uint8_t NewCmd_flag = 0;
 
 /* USER CODE END PV */
 
@@ -52,20 +58,18 @@
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 
-#include <stdio.h>
-
-// ÖØ¶¨Ïòprintfº¯Êý
-int fputc(int ch, FILE *f)
-{
-	HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-	return ch;
-}
+void App_OnBoardLED_Init(void);
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+int fputc(int ch, FILE *f)
+{
+	HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+	return ch;
+}
 /* USER CODE END 0 */
 
 /**
@@ -100,19 +104,25 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_USART1_UART_Init();
+  MX_CAN_Init();
   /* USER CODE BEGIN 2 */
-
+	App_OnBoardLED_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+	printf("Send cmd:SET [target speed]\r\n");
+	HAL_UART_Receive_IT(&huart1, &Rx_byte, 1);
   while (1)
   {
-    /* USER CODE END WHILE */
+		if(NewCmd_flag == 1)
+		{
+			NewCmd_flag = 0;
+			HAL_Delay(2000);
+			printf("Current target speed is %.2f", target_speed);
+		}
 		
-		// test code
-		printf("Hello world.\r\n");
-		HAL_Delay(1000);
+    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
@@ -159,7 +169,47 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void App_OnBoardLED_Init(void)
+{
+	__HAL_RCC_GPIOC_CLK_ENABLE();
+	
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+	
+	GPIO_InitStruct.Pin = GPIO_PIN_13;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_LOW;
+	
+	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+	
+	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+}
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if(huart->Instance == USART1)
+	{
+		Rx_USART1_cmd[Rx_str_index++] = Rx_byte;
+		if(Rx_byte == '\r' || Rx_byte == '\n' || Rx_str_index == 15-1)
+		{
+			Rx_USART1_cmd[Rx_str_index] = '\0';
+			
+			if(sscanf(Rx_USART1_cmd, "SET %f", &target_speed) == 1)
+			{
+				NewCmd_flag = 1;
+				printf("Target speed set to:%.2f\r\n", target_speed);
+			}
+			else
+			{
+				printf("ERROR!Send:SET [target speed]\r\n");
+			}
+			
+			Rx_str_index = 0;
+			Rx_USART1_cmd[0] = '\0';
+		}
+		HAL_UART_Receive_IT(&huart1, &Rx_byte, 1);
+	}
+}
 /* USER CODE END 4 */
 
 /**
