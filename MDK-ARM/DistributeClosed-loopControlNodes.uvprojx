@@ -631,6 +631,11 @@
               <FileType>1</FileType>
               <FilePath>..\Middle_Driver\pid.c</FilePath>
             </File>
+            <File>
+              <FileName>encoder.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middle_Driver\encoder.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

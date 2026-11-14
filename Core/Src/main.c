@@ -26,6 +26,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "pid.h"
+#include "encoder.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,11 +48,17 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-uint8_t Rx_byte; // ��ǰ���յ����ֽ�
-char Rx_USART1_cmd[15]; // �������Դ������ֵ�ָ��
+
+PID_InitTypeDef hpid = {0};
+
+uint8_t Rx_byte;
+char Rx_USART1_cmd[25];
 uint8_t Rx_str_index = 0;
-float target_speed = 0.0f; // ����Ŀ��ֵ
-uint8_t NewCmd_flag = 0;
+float target_speed = 0.0f; 
+int8_t NewCmd_flag = 0;
+float temp_kp = 0.0f;
+float temp_ki = 0.0f;
+float temp_kd = 0.0f;
 
 /* USER CODE END PV */
 
@@ -65,11 +73,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+// printf函数重定向
 int fputc(int ch, FILE *f)
 {
 	HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
 	return ch;
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -107,21 +118,72 @@ int main(void)
   MX_CAN_Init();
   /* USER CODE BEGIN 2 */
 	App_OnBoardLED_Init();
+	PID_Init(&hpid);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+	HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-	printf("Send cmd:SET [target speed]\r\n");
 	HAL_UART_Receive_IT(&huart1, &Rx_byte, 1);
+	printf("#SYSTEM IS READY\r\nSet target speed need print:SET [target speed]\r\nSet PID need print:KP [Kp] KI [Ki] KD [Kd]\r\n");
+	uint32_t last_time = 0;
   while (1)
   {
-		if(NewCmd_flag == 1)
+		/* 采样周期 */
+		if(HAL_GetTick() - last_time >= (uint32_t)TIME_SIMPLE)
 		{
-			NewCmd_flag = 0;
-			HAL_Delay(2000);
-			printf("Current target speed is %.2f", target_speed);
-		}
-		
+			// #0.更新last_time
+			last_time = HAL_GetTick();
+			
+			// #1.由编码器得到当前速度
+			float current_speed = GetCurrent_Speed(4, 11, 103);
+			
+			// #2.更新当前速度
+			PID_UpdateCurrent_Speed(&hpid, current_speed);
+			printf("%.2f,%.2f\r\n", hpid.Current_Speed, hpid.Target_Speed);
+			
+			/* 可以加一个低通滤波 */
+			
+			// #3.主控板是否发送新命令（中断）
+			if(NewCmd_flag == 1)
+			{
+				PID_SetTarget_Speed(&hpid, target_speed);
+				printf("#TARGET SPEED SET SUCCESS.\r\n");
+				NewCmd_flag = 0;
+			}
+			else if(NewCmd_flag == 2)
+			{
+				PID_SetPID(&hpid, temp_kp, temp_ki, temp_kd);
+				printf("#PID SET SUCCESS.\r\n");
+				NewCmd_flag = 0;
+			}
+			else if(NewCmd_flag == -1)
+			{
+				printf("#ERROR!\r\n");
+				NewCmd_flag = 0;
+			}
+			
+			// #4.计算PWM,，判断是否需要改变电机方向
+			int16_t PWM = PID_Calc(&hpid);
+			
+			if(PWM >= 0.0f)
+			{
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+			}
+			else
+			{
+				PWM = -PWM;
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+			}
+			
+			// #5.更新PWM
+			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PWM);
+		}	
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -190,18 +252,21 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	if(huart->Instance == USART1)
 	{
 		Rx_USART1_cmd[Rx_str_index++] = Rx_byte;
-		if(Rx_byte == '\r' || Rx_byte == '\n' || Rx_str_index == 15-1)
+		if(Rx_byte == '\r' || Rx_byte == '\n' || Rx_str_index == 24)
 		{
 			Rx_USART1_cmd[Rx_str_index] = '\0';
 			
 			if(sscanf(Rx_USART1_cmd, "SET %f", &target_speed) == 1)
 			{
 				NewCmd_flag = 1;
-				printf("Target speed set to:%.2f\r\n", target_speed);
+			}
+			else if(sscanf(Rx_USART1_cmd, "KP %f KI %f KD %f", &temp_kp, &temp_ki, &temp_kd) == 3)
+			{
+				NewCmd_flag = 2;
 			}
 			else
 			{
-				printf("ERROR!Send:SET [target speed]\r\n");
+				NewCmd_flag = -1;
 			}
 			
 			Rx_str_index = 0;
