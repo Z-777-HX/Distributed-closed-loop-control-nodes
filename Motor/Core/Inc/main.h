@@ -61,6 +61,10 @@ void Error_Handler(void);
 #define TB6612_AIN1_GPIO_Port GPIOB
 #define TB6612_AIN2_Pin GPIO_PIN_13
 #define TB6612_AIN2_GPIO_Port GPIOB
+#define SCK_Pin GPIO_PIN_6
+#define SCK_GPIO_Port GPIOB
+#define SDA_Pin GPIO_PIN_7
+#define SDA_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
