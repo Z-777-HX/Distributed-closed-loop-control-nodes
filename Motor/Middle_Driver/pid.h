@@ -1,5 +1,5 @@
-#ifndef __PID_H__
-#define __PID_H__
+#ifndef __PID_H
+#define __PID_H
 #define STD_KP 36.0f
 #define STD_KI 1.7f
 #define STD_KD 0.0f

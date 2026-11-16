@@ -31,6 +31,14 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+typedef struct queue_struct
+{
+	int cmd_flag;
+	float queue_target_speed;
+	float queue_kp;
+	float queue_ki;
+	float queue_kd;
+} queue_struct;
 
 /* USER CODE END Includes */
 
@@ -57,14 +65,20 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define Rotation_Direction_FLAG_Pin GPIO_PIN_13
+#define Rotation_Direction_FLAG_GPIO_Port GPIOC
+#define PWM_Pin GPIO_PIN_6
+#define PWM_GPIO_Port GPIOA
+#define DEAD_BAND_FLAG_LED_Pin GPIO_PIN_0
+#define DEAD_BAND_FLAG_LED_GPIO_Port GPIOB
 #define TB6612_AIN1_Pin GPIO_PIN_12
 #define TB6612_AIN1_GPIO_Port GPIOB
 #define TB6612_AIN2_Pin GPIO_PIN_13
 #define TB6612_AIN2_GPIO_Port GPIOB
-#define SCK_Pin GPIO_PIN_6
-#define SCK_GPIO_Port GPIOB
-#define SDA_Pin GPIO_PIN_7
-#define SDA_GPIO_Port GPIOB
+#define S_SCK_Pin GPIO_PIN_6
+#define S_SCK_GPIO_Port GPIOB
+#define S_SDA_Pin GPIO_PIN_7
+#define S_SDA_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

@@ -18,7 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "can.h"
+#include "cmsis_os.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
@@ -31,27 +31,33 @@
 #include "u8g2.h"
 #include "u8x8.h"
 #include <string.h>
+#include "queue.h"
+#include "drawPID.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 PID_InitTypeDef hpid = {0};
+osMessageQueueId_t queue;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-uint8_t Rx_byte;
-char Rx_USART1_cmd[25];
-uint8_t Rx_str_index = 0;
+static uint8_t Rx_byte;
+char Rx_USART1_cmd[26];
+uint8_t indexofcmd = 0;
 float target_speed = 0.0f; 
 int8_t NewCmd_flag = 0;
 float temp_kp = 0.0f;
 float temp_ki = 0.0f;
 float temp_kd = 0.0f;
 u8g2_t u8g2;
+uint32_t last_time = 0;
+queue_struct TxtoQueuebuf = {0, 0.0f, STD_KP, STD_KI, STD_KD};
+int8_t actual_buf[POINT_NUM] = {0};
+int8_t target_buf[POINT_NUM] = {0};
 
 /* USER CODE END PD */
 
@@ -68,13 +74,15 @@ u8g2_t u8g2;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
-void App_OnBoardLED_Init(void);
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+int fputc(int ch, FILE *f);
+/* * * * * u8g2 begin1 * * * * */
 uint8_t u8x8_gpio_and_delay(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
 void u8g2Init(u8g2_t *u8g2);
 void delay_us(uint32_t us);
-int fputc(int ch, FILE *f);
+/* * * * * u8g2 end1 * * * * */
 
 /* USER CODE END PFP */
 
@@ -115,87 +123,38 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_USART1_UART_Init();
-  MX_CAN_Init();
   /* USER CODE BEGIN 2 */
-	App_OnBoardLED_Init();
 	PID_Init(&hpid);
 	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
 	HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
-	
 	u8g2Init(&u8g2);
 	
-  /* USER CODE END 2 */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-	HAL_UART_Receive_IT(&huart1, &Rx_byte, 1);
+	queue = osMessageQueueNew(5, sizeof(queue_struct), NULL);
 	
-	u8g2_ClearDisplay(&u8g2);
 	u8g2_SetFont(&u8g2, u8g2_font_6x10_tf);
 	u8g2_DrawStr(&u8g2, 0, 12, "SYSTEM IS READY.");
 	u8g2_DrawStr(&u8g2, 0, 24, "Set target speed send:");
-	u8g2_DrawStr(&u8g2, 8, 36, "SET [target speed]");
+	u8g2_DrawStr(&u8g2, 8, 36, "SET [target speed]"); // example：SET 50
 	u8g2_DrawStr(&u8g2, 0, 48, "Set PID send:");
-	u8g2_DrawStr(&u8g2, 8, 60, "KP[Kp] KI[Ki] KD[Kd]");
+	u8g2_DrawStr(&u8g2, 8, 60, "KP[Kp] KI[Ki] KD[Kd]"); // example：KP36.0 KI1.7 KD0.0
 	u8g2_SendBuffer(&u8g2);
-	uint32_t last_time = 0;
 	
+	HAL_UART_Receive_IT(&huart1, &Rx_byte, 1);
+  /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
+  MX_FREERTOS_Init();
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
   while (1)
   {
-		/* 采样周期 */
-		if(HAL_GetTick() - last_time >= (uint32_t)TIME_SIMPLE)
-		{
-			// #0.更新last_time
-			last_time = HAL_GetTick();
-			
-			// #1.由编码器得到当前速度
-			float current_speed = GetCurrent_Speed(4, 11, 103);
-			
-			// #2.更新当前速度
-			PID_UpdateCurrent_Speed(&hpid, current_speed);
-			printf("%.2f,%.2f\r\n", hpid.Current_Speed, hpid.Target_Speed);
-			
-			/* 可以加一个低通滤波 */
-			
-			// #3.主控板是否发送新命令（中断）
-			if(NewCmd_flag == 1)
-			{
-				PID_SetTarget_Speed(&hpid, target_speed);
-				printf("#TARGET SPEED SET SUCCESS.\r\n");
-				NewCmd_flag = 0;
-			}
-			else if(NewCmd_flag == 2)
-			{
-				PID_SetPID(&hpid, temp_kp, temp_ki, temp_kd);
-				printf("#PID SET SUCCESS.\r\n");
-				NewCmd_flag = 0;
-			}
-			else if(NewCmd_flag == -1)
-			{
-				printf("#ERROR!\r\n");
-				NewCmd_flag = 0;
-			}
-			
-			// #4.计算PWM,，判断是否需要改变电机方向
-			int16_t PWM = PID_Calc(&hpid);
-			
-			if(PWM >= 0.0f)
-			{
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
-			}
-			else
-			{
-				PWM = -PWM;
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
-				HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
-			}
-			
-			// #5.更新PWM
-			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PWM);
-		}	
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -243,51 +202,43 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-void App_OnBoardLED_Init(void)
-{
-	__HAL_RCC_GPIOC_CLK_ENABLE();
-	
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-	
-	GPIO_InitStruct.Pin = GPIO_PIN_13;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_LOW;
-	
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-	
-	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
-}
-
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
 	if(huart->Instance == USART1)
 	{
-		Rx_USART1_cmd[Rx_str_index++] = Rx_byte;
-		if(Rx_byte == '\r' || Rx_byte == '\n' || Rx_str_index == 24)
+		Rx_USART1_cmd[indexofcmd++] = Rx_byte;
+		if(Rx_byte == '\r' || Rx_byte == '\n' || indexofcmd == 25)
 		{
-			Rx_USART1_cmd[Rx_str_index] = '\0';
-			
-			if(sscanf(Rx_USART1_cmd, "SET %f", &target_speed) == 1)
+			Rx_USART1_cmd[indexofcmd] = '\0';
+
+			if(sscanf(Rx_USART1_cmd, "SET %f", &(TxtoQueuebuf.queue_target_speed)) == 1)
 			{
-				NewCmd_flag = 1;
+				NewCmd_flag = 1;;
 			}
-			else if(sscanf(Rx_USART1_cmd, "KP%f KI%f KD%f", &temp_kp, &temp_ki, &temp_kd) == 3)
+			else if(sscanf(Rx_USART1_cmd, "KP%f KI%f KD%f", &(TxtoQueuebuf.queue_kp), &(TxtoQueuebuf.queue_ki), &(TxtoQueuebuf.queue_kd)) == 3)
 			{
 				NewCmd_flag = 2;
 			}
 			else
 			{
-				NewCmd_flag = -1;
+				NewCmd_flag = -1; // error
 			}
 			
-			Rx_str_index = 0;
+			indexofcmd = 0;
 			Rx_USART1_cmd[0] = '\0';
 		}
+			
 		HAL_UART_Receive_IT(&huart1, &Rx_byte, 1);
 	}
 }
 
+int fputc(int ch, FILE *f)
+{
+	HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+	return ch;
+}
+
+/* * * * * u8g2 begin2 * * * * */
 // 微秒延时函数
 void delay_us(uint32_t us)
 {
@@ -301,7 +252,7 @@ void delay_us(uint32_t us)
 	}
 }
 
-// U8g2 的软件 I2C 底层驱动
+// U8g2的软件I2C底层驱动
 uint8_t u8x8_gpio_and_delay(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
 {
     switch (msg)
@@ -367,14 +318,31 @@ void u8g2Init(u8g2_t *u8g2)
 	u8g2_SetPowerSave(u8g2, 0); // 打开显示器
 	u8g2_ClearBuffer(u8g2);
 }
-
-int fputc(int ch, FILE *f)
-{
-	HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
-	return ch;
-}
+/* * * * * u8g2 end2 * * * * */
 
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM4 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM4)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.

@@ -45,25 +45,36 @@ void MX_GPIO_Init(void)
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|TB6612_AIN1_Pin|TB6612_AIN2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Rotation_Direction_FLAG_GPIO_Port, Rotation_Direction_FLAG_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, SCK_Pin|SDA_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, DEAD_BAND_FLAG_LED_Pin|TB6612_AIN1_Pin|TB6612_AIN2_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PB0 TB6612_AIN1_Pin TB6612_AIN2_Pin */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|TB6612_AIN1_Pin|TB6612_AIN2_Pin;
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, S_SCK_Pin|S_SDA_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : Rotation_Direction_FLAG_Pin */
+  GPIO_InitStruct.Pin = Rotation_Direction_FLAG_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(Rotation_Direction_FLAG_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : DEAD_BAND_FLAG_LED_Pin TB6612_AIN1_Pin TB6612_AIN2_Pin */
+  GPIO_InitStruct.Pin = DEAD_BAND_FLAG_LED_Pin|TB6612_AIN1_Pin|TB6612_AIN2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SCK_Pin SDA_Pin */
-  GPIO_InitStruct.Pin = SCK_Pin|SDA_Pin;
+  /*Configure GPIO pins : S_SCK_Pin S_SDA_Pin */
+  GPIO_InitStruct.Pin = S_SCK_Pin|S_SDA_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;

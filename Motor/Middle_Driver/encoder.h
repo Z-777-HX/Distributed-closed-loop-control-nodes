@@ -1,6 +1,5 @@
-#ifndef __ENCODER_H__
-#define __ENCODER_H__
-
+#ifndef __ENCODER_H
+#define __ENCODER_H
 #define TIME_SIMPLE 20.0f
 
 #include <stdint.h>
