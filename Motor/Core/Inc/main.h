@@ -31,14 +31,6 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-typedef struct queue_struct
-{
-	int cmd_flag;
-	float queue_target_speed;
-	float queue_kp;
-	float queue_ki;
-	float queue_kd;
-} queue_struct;
 
 /* USER CODE END Includes */
 

@@ -30,32 +30,30 @@
 #include "encoder.h"
 #include "u8g2.h"
 #include "tim.h"
-#include "usart.h"
-#include "drawPID.h"
-#undef configMAX_PRIORITIES
-#define configMAX_PRIORITIES 56
+//#include "drawPID.h"
+#include "convention.h"
+#include "can.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 extern PID_InitTypeDef hpid;
-extern osMessageQueueId_t queue;
-extern struct queue_struct TxtoQueuebuf;
+extern osMessageQueueId_t can_queue;
+extern osMessageQueueId_t uart_queue;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-extern char Rx_USART1_cmd[26];
-extern float target_speed; 
-extern int8_t NewCmd_flag;
-extern float temp_kp;
-extern float temp_ki;
-extern float temp_kd;
+static uint8_t UartNewCmd_flag = 0;
+static uint8_t CanNewCmd_flag = 0;
+static uint8_t Heart_flag = 0;
 extern u8g2_t u8g2;
-extern int8_t actual_buf[POINT_NUM];
-extern int8_t target_buf[POINT_NUM];
+//static int8_t actual_buf[POINT_NUM];
+//static int8_t target_buf[POINT_NUM];
+static uint32_t last_HeartBeat = 0;
+static CAN_struct CAN_Tx = {0};
 
 /* USER CODE END PD */
 
@@ -79,22 +77,29 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t ControlTaskHandle;
 const osThreadAttr_t ControlTask_attributes = {
   .name = "ControlTask",
-  .stack_size = 256 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityHigh4,
 };
 /* Definitions for UartTask */
 osThreadId_t UartTaskHandle;
 const osThreadAttr_t UartTask_attributes = {
   .name = "UartTask",
-  .stack_size = 512 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityHigh3,
 };
 /* Definitions for OledTask */
 osThreadId_t OledTaskHandle;
 const osThreadAttr_t OledTask_attributes = {
   .name = "OledTask",
-  .stack_size = 1024 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityHigh1,
+};
+/* Definitions for StatusReport */
+osThreadId_t StatusReportHandle;
+const osThreadAttr_t StatusReport_attributes = {
+  .name = "StatusReport",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityHigh2,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -106,6 +111,7 @@ void StartDefaultTask(void *argument);
 void prvControlTask(void *argument);
 void prvUartTask(void *argument);
 void prvOledTask(void *argument);
+void prvStatusReport(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -160,6 +166,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of OledTask */
   OledTaskHandle = osThreadNew(prvOledTask, NULL, &OledTask_attributes);
 
+  /* creation of StatusReport */
+  StatusReportHandle = osThreadNew(prvStatusReport, NULL, &StatusReport_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -203,32 +212,86 @@ void prvControlTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-		// #0.检查队列
-		queue_struct RxfromQueuebuf = {0};
-		if(osMessageQueueGet(queue, (void *)&RxfromQueuebuf, NULL, 0) == osOK)
+		// #1.检查can队列
+		CAN_struct RxfromQueuebufStruct = {0};
+		while(osMessageQueueGet(can_queue, (void *)&RxfromQueuebufStruct, NULL, 0) == osOK)
 		{
-			queue_struct *temp = (queue_struct *)&RxfromQueuebuf;
-			
-			if(temp->cmd_flag == 1)
+			if(RxfromQueuebufStruct.Can_Id == CAN_ID_HEARTBEAT)
 			{
-				PID_SetTarget_Speed(&hpid, temp->queue_target_speed);
+				last_HeartBeat = HAL_GetTick();
+				Heart_flag = 1;
 			}
-			else if(temp->cmd_flag == 2)
+			
+			if(Heart_flag) // 心跳是否正常
 			{
-				PID_SetPID(&hpid, temp->queue_kp, temp->queue_ki, temp->queue_kd);
+				if(RxfromQueuebufStruct.Can_Id == CAN_ID_TARGET_SPEED)
+				{
+					uint16_t u_target_speed = 0;
+					
+					u_target_speed = RxfromQueuebufStruct.Can_data[0] + (RxfromQueuebufStruct.Can_data[1] << 8);
+					
+					float target_speed = ((float)((int16_t)u_target_speed)) / 100.0f;
+					
+					PID_SetTarget_Speed(&hpid, target_speed);
+					
+					CanNewCmd_flag++;
+				}
+				else if(RxfromQueuebufStruct.Can_Id == CAN_ID_PID)
+				{
+					uint16_t temp_kp = 0, temp_ki = 0, temp_kd = 0;
+					
+					temp_kp = RxfromQueuebufStruct.Can_data[0] + (RxfromQueuebufStruct.Can_data[1] << 8);
+					temp_ki = RxfromQueuebufStruct.Can_data[2] + (RxfromQueuebufStruct.Can_data[3] << 8);
+					temp_kd = RxfromQueuebufStruct.Can_data[4] + (RxfromQueuebufStruct.Can_data[5] << 8);
+					
+					float can_kp = ((float)temp_kp) / 100.0f;
+					float can_ki = ((float)temp_ki) / 100.0f;
+					float can_kd = ((float)temp_kd) / 100.0f;
+					
+					PID_SetPID(&hpid, can_kp, can_ki ,can_kd);
+					
+					CanNewCmd_flag++;
+				}
 			}
 		}
 		
-		// #1.获取当前速度
+		if(HAL_GetTick() - last_HeartBeat >= EMERGENCY_TIME) // 长时间心跳丢失
+		{
+			Heart_flag = 0;
+		}
+		
+		// #2.检查uart队列
+		char RxfromQueuebufArr[30];
+		while(osMessageQueueGet(uart_queue, (void *)RxfromQueuebufArr, NULL, 0) == osOK)
+		{
+			float temp_kp = 0.0f;
+			float temp_ki = 0.0f;
+			float temp_kd = 0.0f;
+			float target_speed = 0.0f;
+			
+			if(sscanf(RxfromQueuebufArr, "SET %f", &target_speed) == 1)
+			{
+				PID_SetTarget_Speed(&hpid, target_speed);
+				UartNewCmd_flag++;
+			}
+			else if(sscanf(RxfromQueuebufArr, "KP%f KI%f KD%f", &temp_kp, &temp_ki, &temp_kd) == 3)
+			{
+				PID_SetPID(&hpid, temp_kp, temp_ki, temp_kd);
+				UartNewCmd_flag++;
+			}
+		}
+		
+		// #3.获取当前速度
 		float current_speed = GetCurrent_Speed(4, 11, 103);
 		
-		// #2.更新当前速度，将当前速度与目标速度存入绘制波形缓冲区
+		// #4.更新当前速度
 		PID_UpdateCurrent_Speed(&hpid, current_speed);
 		
-		add_to_buf(actual_buf, hpid.Current_Speed);
-		add_to_buf(target_buf, hpid.Target_Speed);
+//		add_to_buf(actual_buf, hpid.Current_Speed);
+//		add_to_buf(target_buf, hpid.Target_Speed);
 		
-		// #3.计算PWM，判断是否反转电机
+		
+		// #5.计算PWM，判断是否反转电机
 		int16_t PWM = PID_Calc(&hpid);
 		
 		if(PWM >= 0.0f)
@@ -245,10 +308,10 @@ void prvControlTask(void *argument)
 			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
 		}
 		
-		// #4.更新PWM占空比
+		// #6.更新PWM占空比
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PWM);
 		
-		// #5.“睡”20ms
+		// #7.“睡”20ms
 		vTaskDelayUntil(&xlast_time, pdMS_TO_TICKS(20));
 	}
   
@@ -268,36 +331,7 @@ void prvUartTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    printf("%.2f,%.2f\r\n", hpid.Current_Speed, hpid.Target_Speed);
-		
-		// #是否有新命令需要写入队列
-		if(NewCmd_flag == 1)
-		{
-			TxtoQueuebuf.cmd_flag = 1;
-			osMessageQueuePut(queue, (void *)&TxtoQueuebuf, 0, 0);	
-			
-			u8g2_ClearBuffer(&u8g2);
-			u8g2_DrawStr(&u8g2, 0, 12, "SET TARGET SUCCESS.");
-			u8g2_SendBuffer(&u8g2);
-		}
-		if(NewCmd_flag == 2)
-		{
-			TxtoQueuebuf.cmd_flag = 2;
-			osMessageQueuePut(queue, (void *)&TxtoQueuebuf, 0, 0);
-			
-			u8g2_ClearBuffer(&u8g2);
-			u8g2_DrawStr(&u8g2, 0, 12, "SET PID SUCCESS.");
-			u8g2_SendBuffer(&u8g2);
-		}
-		else if(NewCmd_flag == -1)
-		{
-			u8g2_ClearBuffer(&u8g2);
-			u8g2_DrawStr(&u8g2, 0, 12, "ERROR!!");
-			u8g2_SendBuffer(&u8g2);
-		}
-		
-		NewCmd_flag = 0;
-		
+    printf("%.2f,%.2f\r\n", hpid.Current_Speed, hpid.Target_Speed);		
 		osDelay(50);
   }
   /* USER CODE END prvUartTask */
@@ -316,10 +350,85 @@ void prvOledTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    draw_speed_curve(actual_buf, target_buf);
+		// #1.是否有来自Master命令
+		if(CanNewCmd_flag > 0)
+		{
+			u8g2_ClearBuffer(&u8g2);
+			u8g2_DrawStr(&u8g2, 0, 12, "CAN CMD SUCCESS.");
+			u8g2_SendBuffer(&u8g2);
+			
+			CanNewCmd_flag = 0;
+		}
+		
+		if(!Heart_flag) // 心跳丢失
+		{
+			u8g2_ClearBuffer(&u8g2);
+			u8g2_DrawStr(&u8g2, 0, 12, "MASTER ERROR!!");
+			u8g2_DrawStr(&u8g2, 0, 24, "MASTER ERROR!!");
+			u8g2_DrawStr(&u8g2, 0, 36, "MASTER ERROR!!");
+			u8g2_DrawStr(&u8g2, 0, 60, "--ONLY UART NOW.");
+			u8g2_SendBuffer(&u8g2);
+		}
+		else
+		{
+			u8g2_ClearBuffer(&u8g2);
+			u8g2_DrawStr(&u8g2, 0, 12, "MASTER RUNNING...");
+			u8g2_DrawStr(&u8g2, 0, 24, "MASTER RUNNING...");
+			u8g2_DrawStr(&u8g2, 0, 36, "MASTER RUNNING...");
+			u8g2_DrawStr(&u8g2, 0, 60, "--MASTER OR UART.");
+			u8g2_SendBuffer(&u8g2);
+		}
+		
+		// #2.是否有来自串口新命令
+		if(UartNewCmd_flag)
+		{
+			u8g2_ClearBuffer(&u8g2);
+			u8g2_DrawStr(&u8g2, 0, 12, "UART CMD SUCCESS.");
+			u8g2_SendBuffer(&u8g2);
+			
+			UartNewCmd_flag = 0;
+		}
+//    draw_speed_curve(actual_buf, target_buf);
 		osDelay(100);
   }
   /* USER CODE END prvOledTask */
+}
+
+/* USER CODE BEGIN Header_prvStatusReport */
+/**
+* @brief Function implementing the StatusReport thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_prvStatusReport */
+void prvStatusReport(void *argument)
+{
+  /* USER CODE BEGIN prvStatusReport */
+  /* Infinite loop */
+  for(;;)
+  {
+		static CAN_TxHeaderTypeDef TxHeader;
+		
+		TxHeader.StdId = CAN_ID_STATUS;
+		TxHeader.IDE = CAN_ID_STD;
+		TxHeader.DLC = CAN_DLC_STATUS;
+		TxHeader.RTR = CAN_RTR_DATA;
+		TxHeader.TransmitGlobalTime = DISABLE;
+		
+		uint16_t PWM = __HAL_TIM_GET_COMPARE(&htim3, TIM_CHANNEL_1);
+		uint16_t u_current_speed = (uint16_t)(hpid.Current_Speed * 100);
+		
+		CAN_Tx.Can_data[0] = PWM;
+		CAN_Tx.Can_data[1] = PWM >> 8;
+		CAN_Tx.Can_data[2] = u_current_speed;
+		CAN_Tx.Can_data[3] = u_current_speed >> 8;
+		
+		static uint32_t txMailbox;
+		
+		HAL_CAN_AddTxMessage(&hcan, &TxHeader, CAN_Tx.Can_data, &txMailbox);
+    osDelay(50);
+  }
+  /* USER CODE END prvStatusReport */
 }
 
 /* Private application code --------------------------------------------------*/

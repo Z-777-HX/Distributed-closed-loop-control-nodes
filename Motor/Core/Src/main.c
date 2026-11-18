@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
+#include "can.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
@@ -27,37 +28,26 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include "pid.h"
-#include "encoder.h"
 #include "u8g2.h"
-#include "u8x8.h"
-#include <string.h>
-#include "queue.h"
-#include "drawPID.h"
+#include "convention.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 PID_InitTypeDef hpid = {0};
-osMessageQueueId_t queue;
+osMessageQueueId_t can_queue;
+osMessageQueueId_t uart_queue;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 static uint8_t Rx_byte;
-char Rx_USART1_cmd[26];
-uint8_t indexofcmd = 0;
-float target_speed = 0.0f; 
-int8_t NewCmd_flag = 0;
-float temp_kp = 0.0f;
-float temp_ki = 0.0f;
-float temp_kd = 0.0f;
+static CAN_struct CAN_Rx = {0};
+static char Rx_USART1_cmd[30];
+static uint8_t indexofcmd = 0;
 u8g2_t u8g2;
-uint32_t last_time = 0;
-queue_struct TxtoQueuebuf = {0, 0.0f, STD_KP, STD_KI, STD_KD};
-int8_t actual_buf[POINT_NUM] = {0};
-int8_t target_buf[POINT_NUM] = {0};
 
 /* USER CODE END PD */
 
@@ -77,6 +67,7 @@ void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *can);
 int fputc(int ch, FILE *f);
 /* * * * * u8g2 begin1 * * * * */
 uint8_t u8x8_gpio_and_delay(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
@@ -123,13 +114,32 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_USART1_UART_Init();
+  MX_CAN_Init();
   /* USER CODE BEGIN 2 */
+	/* * * CAN 过滤器 * * */
+	CAN_FilterTypeDef sFilterConfig;
+	
+	sFilterConfig.FilterBank = 0;
+	sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
+	sFilterConfig.FilterScale = CAN_FILTERSCALE_16BIT;
+	sFilterConfig.FilterFIFOAssignment = CAN_FILTER_FIFO1;
+	sFilterConfig.FilterActivation = ENABLE;
+	sFilterConfig.FilterIdHigh = 0x010 << 5;
+	sFilterConfig.FilterIdLow = 0x0000;
+	sFilterConfig.FilterMaskIdHigh = 0x7F0 << 5;
+	sFilterConfig.FilterMaskIdLow = 0x0000;
+	
+	HAL_CAN_ConfigFilter(&hcan, &sFilterConfig);
+	HAL_CAN_Start(&hcan);
+	HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO1_MSG_PENDING);
+	/* * * CAN 过滤器 * * */
 	PID_Init(&hpid);
 	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
 	HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
 	u8g2Init(&u8g2);
-	
-	queue = osMessageQueueNew(5, sizeof(queue_struct), NULL);
+
+	can_queue = osMessageQueueNew(5, sizeof(CAN_struct), NULL);
+	uart_queue = osMessageQueueNew(5, sizeof(Rx_USART1_cmd), NULL);
 	
 	u8g2_SetFont(&u8g2, u8g2_font_6x10_tf);
 	u8g2_DrawStr(&u8g2, 0, 12, "SYSTEM IS READY.");
@@ -207,28 +217,31 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	if(huart->Instance == USART1)
 	{
 		Rx_USART1_cmd[indexofcmd++] = Rx_byte;
-		if(Rx_byte == '\r' || Rx_byte == '\n' || indexofcmd == 25)
+		if(Rx_byte == '\r' || Rx_byte == '\n' || indexofcmd == 29)
 		{
 			Rx_USART1_cmd[indexofcmd] = '\0';
 
-			if(sscanf(Rx_USART1_cmd, "SET %f", &(TxtoQueuebuf.queue_target_speed)) == 1)
-			{
-				NewCmd_flag = 1;;
-			}
-			else if(sscanf(Rx_USART1_cmd, "KP%f KI%f KD%f", &(TxtoQueuebuf.queue_kp), &(TxtoQueuebuf.queue_ki), &(TxtoQueuebuf.queue_kd)) == 3)
-			{
-				NewCmd_flag = 2;
-			}
-			else
-			{
-				NewCmd_flag = -1; // error
-			}
+			osMessageQueuePut(uart_queue, (void *)Rx_USART1_cmd, 0, 0);
 			
 			indexofcmd = 0;
 			Rx_USART1_cmd[0] = '\0';
 		}
 			
 		HAL_UART_Receive_IT(&huart1, &Rx_byte, 1);
+	}
+}
+
+void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+	if(hcan->Instance == CAN1)
+	{
+		CAN_RxHeaderTypeDef RxHeader;
+		
+		if(HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &RxHeader, CAN_Rx.Can_data) == HAL_OK)
+		{
+			CAN_Rx.Can_Id = RxHeader.StdId;
+			osMessageQueuePut(can_queue, (void *)&CAN_Rx, 0, 0);
+		}
 	}
 }
 

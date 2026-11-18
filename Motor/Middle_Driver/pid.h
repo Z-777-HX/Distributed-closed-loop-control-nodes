@@ -7,7 +7,7 @@
 #define INTEGRAL_MIN_LIMIT -1800.0f
 #define PWM_MAX_LIMIT 1799
 #define PWM_MIN_LIMIT -1799
-#define DEAD_BAND_WIDTH 0.5f // 误差绝对值<0.5不再调节
+#define DEAD_BAND_WIDTH 0.7f // 误差绝对值<0.7不再调节
 
 #include <stdint.h>
 

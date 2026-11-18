@@ -1,7 +1,6 @@
 #include "pid.h"
 #include <math.h>
 #include "stm32f1xx_hal.h"
-#include "gpio.h"
 
 // 
 // @简介：PID初始化函数
@@ -25,7 +24,7 @@ void PID_Init(PID_InitTypeDef *PID_InitStruct)
 
 //
 // @简介：PID调节函数
-//   		 最多小数点后三位，小数点前后加小数点最多六位
+//   		 最多小数点后2位，小数点前后加小数点最多5位
 //
 void PID_SetPID(PID_InitTypeDef *PID_InitStruct, float New_Kp, float New_Ki, float New_Kd)
 {
@@ -40,6 +39,11 @@ void PID_SetPID(PID_InitTypeDef *PID_InitStruct, float New_Kp, float New_Ki, flo
 void PID_SetTarget_Speed(PID_InitTypeDef *PID_InitStruct, float New_Target_Speed)
 {
 	PID_InitStruct->Target_Speed = New_Target_Speed;
+	
+	if(PID_InitStruct->Target_Speed == 0.0f)
+	{
+		PID_InitStruct->integral = 0.0f;
+	}
 
 	PID_InitStruct->Current_Error = PID_InitStruct->Target_Speed - PID_InitStruct->Current_Speed;
 	PID_InitStruct->Last_Error = PID_InitStruct->Current_Error;
