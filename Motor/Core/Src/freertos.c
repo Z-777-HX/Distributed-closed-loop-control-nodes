@@ -54,6 +54,7 @@ extern u8g2_t u8g2;
 //static int8_t target_buf[POINT_NUM];
 static uint32_t last_HeartBeat = 0;
 static CAN_struct CAN_Tx = {0};
+static float last_speed = 0.0f;
 
 /* USER CODE END PD */
 
@@ -213,10 +214,10 @@ void prvControlTask(void *argument)
   for(;;)
   {
 		// #1.检查can队列
-		CAN_struct RxfromQueuebufStruct = {0};
+		static CAN_struct RxfromQueuebufStruct = {0};
 		while(osMessageQueueGet(can_queue, (void *)&RxfromQueuebufStruct, NULL, 0) == osOK)
 		{
-			if(RxfromQueuebufStruct.Can_Id == CAN_ID_HEARTBEAT)
+			if(RxfromQueuebufStruct.Can_Id == CAN_ID_MASTER_HEARTBEAT)
 			{
 				last_HeartBeat = HAL_GetTick();
 				Heart_flag = 1;
@@ -224,9 +225,9 @@ void prvControlTask(void *argument)
 			
 			if(Heart_flag) // 心跳是否正常
 			{
-				if(RxfromQueuebufStruct.Can_Id == CAN_ID_TARGET_SPEED)
+				if(RxfromQueuebufStruct.Can_Id == CAN_ID_MOTOR1_TARGET_SPEED)
 				{
-					uint16_t u_target_speed = 0;
+					static uint16_t u_target_speed = 0;
 					
 					u_target_speed = RxfromQueuebufStruct.Can_data[0] + (RxfromQueuebufStruct.Can_data[1] << 8);
 					
@@ -236,9 +237,9 @@ void prvControlTask(void *argument)
 					
 					CanNewCmd_flag++;
 				}
-				else if(RxfromQueuebufStruct.Can_Id == CAN_ID_PID)
+				else if(RxfromQueuebufStruct.Can_Id == CAN_ID_MOTOR1_PID)
 				{
-					uint16_t temp_kp = 0, temp_ki = 0, temp_kd = 0;
+					static uint16_t temp_kp = 0, temp_ki = 0, temp_kd = 0;
 					
 					temp_kp = RxfromQueuebufStruct.Can_data[0] + (RxfromQueuebufStruct.Can_data[1] << 8);
 					temp_ki = RxfromQueuebufStruct.Can_data[2] + (RxfromQueuebufStruct.Can_data[3] << 8);
@@ -261,15 +262,15 @@ void prvControlTask(void *argument)
 		}
 		
 		// #2.检查uart队列
-		char RxfromQueuebufArr[30];
+		static char RxfromQueuebufArr[30];
 		while(osMessageQueueGet(uart_queue, (void *)RxfromQueuebufArr, NULL, 0) == osOK)
 		{
-			float temp_kp = 0.0f;
-			float temp_ki = 0.0f;
-			float temp_kd = 0.0f;
-			float target_speed = 0.0f;
+			static float temp_kp = 0.0f;
+			static float temp_ki = 0.0f;
+			static float temp_kd = 0.0f;
+			static float target_speed = 0.0f;
 			
-			if(sscanf(RxfromQueuebufArr, "SET %f", &target_speed) == 1)
+			if(sscanf(RxfromQueuebufArr, "SET%f", &target_speed) == 1)
 			{
 				PID_SetTarget_Speed(&hpid, target_speed);
 				UartNewCmd_flag++;
@@ -282,7 +283,8 @@ void prvControlTask(void *argument)
 		}
 		
 		// #3.获取当前速度
-		float current_speed = GetCurrent_Speed(4, 11, 103);
+		float current_speed = GetCurrent_Speed(4, 11, 103, last_speed);
+		last_speed = current_speed;
 		
 		// #4.更新当前速度
 		PID_UpdateCurrent_Speed(&hpid, current_speed);
@@ -350,44 +352,40 @@ void prvOledTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
+		u8g2_ClearBuffer(&u8g2);
+		
 		// #1.是否有来自Master命令
 		if(CanNewCmd_flag > 0)
 		{
-			u8g2_ClearBuffer(&u8g2);
-			u8g2_DrawStr(&u8g2, 0, 12, "CAN CMD SUCCESS.");
-			u8g2_SendBuffer(&u8g2);
+			u8g2_DrawStr(&u8g2, 0, 60, "CAN CMD SUCCESS.");
 			
 			CanNewCmd_flag = 0;
 		}
 		
 		if(!Heart_flag) // 心跳丢失
 		{
-			u8g2_ClearBuffer(&u8g2);
 			u8g2_DrawStr(&u8g2, 0, 12, "MASTER ERROR!!");
 			u8g2_DrawStr(&u8g2, 0, 24, "MASTER ERROR!!");
 			u8g2_DrawStr(&u8g2, 0, 36, "MASTER ERROR!!");
-			u8g2_DrawStr(&u8g2, 0, 60, "--ONLY UART NOW.");
-			u8g2_SendBuffer(&u8g2);
+			u8g2_DrawStr(&u8g2, 0, 48, "--ONLY UART NOW.");
 		}
 		else
 		{
-			u8g2_ClearBuffer(&u8g2);
 			u8g2_DrawStr(&u8g2, 0, 12, "MASTER RUNNING...");
 			u8g2_DrawStr(&u8g2, 0, 24, "MASTER RUNNING...");
 			u8g2_DrawStr(&u8g2, 0, 36, "MASTER RUNNING...");
-			u8g2_DrawStr(&u8g2, 0, 60, "--MASTER OR UART.");
-			u8g2_SendBuffer(&u8g2);
+			u8g2_DrawStr(&u8g2, 0, 48, "--MASTER OR UART.");
 		}
 		
 		// #2.是否有来自串口新命令
 		if(UartNewCmd_flag)
 		{
-			u8g2_ClearBuffer(&u8g2);
-			u8g2_DrawStr(&u8g2, 0, 12, "UART CMD SUCCESS.");
-			u8g2_SendBuffer(&u8g2);
+			u8g2_DrawStr(&u8g2, 0, 60, "UART CMD SUCCESS.");
 			
 			UartNewCmd_flag = 0;
 		}
+		
+		u8g2_SendBuffer(&u8g2);
 //    draw_speed_curve(actual_buf, target_buf);
 		osDelay(100);
   }
@@ -409,9 +407,9 @@ void prvStatusReport(void *argument)
   {
 		static CAN_TxHeaderTypeDef TxHeader;
 		
-		TxHeader.StdId = CAN_ID_STATUS;
+		TxHeader.StdId = CAN_ID_MOTOR1_STATUS;
 		TxHeader.IDE = CAN_ID_STD;
-		TxHeader.DLC = CAN_DLC_STATUS;
+		TxHeader.DLC = CAN_DLC_MOTOR1_STATUS;
 		TxHeader.RTR = CAN_RTR_DATA;
 		TxHeader.TransmitGlobalTime = DISABLE;
 		

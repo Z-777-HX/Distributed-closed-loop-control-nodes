@@ -7,7 +7,7 @@
 //			 PPR 编码器基础脉冲（11表示一圈11个脉冲）
 //			 GR 减速比（103表示电机转103圈负载转一圈）
 // 			 
-float GetCurrent_Speed(uint8_t X, uint16_t PPR, uint16_t GR)
+float GetCurrent_Speed(uint8_t X, uint16_t PPR, uint16_t GR, float Last_Speed)
 {
 	int16_t cnt = (int16_t)(__HAL_TIM_GET_COUNTER(&htim2));
 	__HAL_TIM_SET_COUNTER(&htim2, 0);
@@ -18,5 +18,6 @@ float GetCurrent_Speed(uint8_t X, uint16_t PPR, uint16_t GR)
 	}
 
 	float Current_Speed = (60000.0f * cnt) / (TIME_SIMPLE * X * PPR * GR);
+	Current_Speed = Current_Speed * (1 - ALPHA) + Last_Speed * ALPHA; // 一阶低通滤波
 	return Current_Speed;
 }
